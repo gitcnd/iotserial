@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Serial Terminal</title>
+    <link rel="stylesheet" href="xterm.css" />
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            position: relative;
+        }
+        .control-button {
+            padding: 10px;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            cursor: pointer;
+        }
+        #button-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+            display: flex;
+            gap: 10px; /* Adds space between the buttons */
+        }
+        #right-buttons-container {
+            position: absolute;
+            top: 10px;
+            right: 30px;
+            z-index: 10;
+            display: flex;
+            gap: 10px; /* Adds space between the buttons */
+        }
+        #terminal-container {
+            width: 100%;
+            height: 100%;
+            background-color: blue; /* Blue background to debug height issue */
+        }
+        #terminal {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="button-container">
+        <button id="connect-button" class="control-button">Connect to Serial Device</button>
+        <button id="toggle-dtr-button" class="control-button">DTR</button>
+        <button id="toggle-rts-button" class="control-button">RTS</button>
+    </div>
+    <div id="right-buttons-container" style="display: none;">
+        <button id="dtr-button" class="control-button">DTR: (Click to Toggle)</button>
+        <button id="rts-button" class="control-button">RTS: (Click to Toggle)</button>
+        <button id="disconnect-button" class="control-button">Disconnect</button>
+    </div>
+    <div id="terminal-container">
+        <div id="terminal"></div>
+    </div>
+
+    <script src="xterm.js"></script>
+    <script src="xterm-addon-fit.js"></script>
+    <script>
+        let port;
+        let reader;
+        let writer;
+        let term;
+        let fitAddon;
+
+        // Initialize initial states for DTR and RTS
+        let stateDTR = true;
+        let stateRTS = true;
+
+        // Initialize textDTR and textRTS
+        let textDTR = "";
+        let textRTS = "";
+
+        function getUrlParameter(name) {
+            name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+            const regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+            const results = regex.exec(location.search);
+            return results === null ? null : decodeURIComponent(results[1].replace(/\+/g, ' '));
+        }
+
+        function updateToggleButtons() {
+            const dtrButton = document.getElementById('toggle-dtr-button');
+            const rtsButton = document.getElementById('toggle-rts-button');
+            dtrButton.innerText = !stateDTR ? "DTR Clear" : "DTR Set";
+            rtsButton.innerText = !stateRTS ? "RTS Clear" : "RTS Set";
+        }
+
+        document.getElementById('connect-button').addEventListener('click', async () => {
+            term = new Terminal();
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal'));
+            fitAddon.fit();
+            term.focus();  // Automatically focus the terminal
+
+            // Request a port and open a connection
+            port = await navigator.serial.requestPort();
+            await port.open({ 
+                baudRate: 115200,
+                dataBits: 8,
+                stopBits: 1,
+                parity: 'none',
+                flowControl: 'none'
+            });
+
+            // Set initial states for DTR and RTS signals
+            await port.setSignals({ dataTerminalReady: stateDTR, requestToSend: stateRTS });
+
+            // Set initial state of DTR and RTS buttons
+            document.getElementById('dtr-button').innerText = stateDTR ? "DTR" + textDTR + ": Set (Click to Clear)" : "DTR" + textDTR + ": Cleared (Click to Set)";
+            document.getElementById('rts-button').innerText = stateRTS ? "RTS" + textRTS + ": Set (Click to Clear)" : "RTS" + textRTS + ": Cleared (Click to Set)";
+
+            // Setup reader and writer
+            reader = port.readable.getReader();
+            writer = port.writable.getWriter();
+
+            // Read data from serial and write to terminal
+            const readLoop = async () => {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        reader.releaseLock();
+                        break;
+                    }
+                    term.write(value);
+                }
+            };
+
+            readLoop();
+
+            // Handle input from terminal
+            term.onData(data => {
+                const encoder = new TextEncoder();
+                writer.write(encoder.encode(data));
+            });
+
+            // Hide connect and toggle buttons and show other buttons
+            document.getElementById('button-container').style.display = 'none';
+            document.getElementById('right-buttons-container').style.display = 'flex';
+        });
+
+        document.getElementById('disconnect-button').addEventListener('click', async () => {
+            if (port) {
+                reader.cancel();
+                reader.releaseLock();
+                writer.releaseLock();
+                await port.close();
+
+                // Reset the button states
+                document.getElementById('button-container').style.display = 'flex';
+                document.getElementById('right-buttons-container').style.display = 'none';
+                document.getElementById('terminal').innerHTML = '';  // Clear the terminal
+            }
+        });
+
+        document.getElementById('dtr-button').addEventListener('click', async () => {
+            if (port) {
+                const dtrButton = document.getElementById('dtr-button');
+		stateDTR=!stateDTR
+                await port.setSignals({ dataTerminalReady: stateDTR });
+                dtrButton.innerText = stateDTR ? "DTR" + textDTR + ": Set (Click to Clear)" : "DTR" + textDTR + ": Cleared (Click to Set)";
+                term.focus();  // Refocus the terminal
+            }
+        });
+
+        document.getElementById('rts-button').addEventListener('click', async () => {
+            if (port) {
+                const rtsButton = document.getElementById('rts-button');
+                stateRTS=!stateRTS
+                await port.setSignals({ requestToSend: stateRTS });
+                rtsButton.innerText = stateRTS ? "RTS" + textRTS + ": Set (Click to Clear)" : "RTS" + textRTS + ": Cleared (Click to Set)";
+                term.focus();  // Refocus the terminal
+            }
+        });
+
+        document.getElementById('toggle-dtr-button').addEventListener('click', () => {
+            const dtrButton = document.getElementById('toggle-dtr-button');
+            stateDTR = !stateDTR;
+            updateToggleButtons();
+        });
+
+        document.getElementById('toggle-rts-button').addEventListener('click', () => {
+            stateRTS = !stateRTS;
+            updateToggleButtons();
+        });
+
+        window.addEventListener('resize', () => {
+            console.log("resize event");
+            const termContainer = document.getElementById('terminal-container');
+            termContainer.style.height = `${window.innerHeight}px`;
+            termContainer.style.width = `${window.innerWidth}px`;
+            if (term && fitAddon) {
+                console.log("term and fitAddon are defined");
+                fitAddon.fit();
+            }
+        });
+
+        window.onload = () => {
+            // Parse URL parameters for initial DTR and RTS state
+            const dtrParam = getUrlParameter('dtr');
+            const rtsParam = getUrlParameter('rts');
+            const flowParam = getUrlParameter('flow');
+            stateDTR = dtrParam !== null ? dtrParam === '1' : true;
+            stateRTS = rtsParam !== null ? rtsParam === '1' : true;
+            if (flowParam === '0') { textDTR = "/GPIO0"; textRTS = "/RESET"; }
+
+            updateToggleButtons();
+
+            const termContainer = document.getElementById('terminal-container');
+            termContainer.style.height = `${window.innerHeight}px`;
+            termContainer.style.width = `${window.innerWidth}px`;
+        };
+    </script>
+</body>
+</html>
